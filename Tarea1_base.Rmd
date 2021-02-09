@@ -1,0 +1,632 @@
+---
+title: 'Economía Computacional: Tarea 1'
+author:
+  - Montserrat Aldave
+  - Alejandro Fajardo
+  - Carlos Tabares
+  - Jose Pablo García
+date: '2021'
+output:
+  html_document:
+    code_folding: hide
+    df_print: paged
+  pdf_document:
+    fig_width: 6
+    fig_height: 4
+fontsize: 10 pt
+---
+
+```{r setup, include=FALSE, echo = FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	fig.height = 4,
+	fig.width = 6,
+	message = FALSE,
+	warning = FALSE,
+	cache = TRUE,
+	digits = 3,
+	width = 48
+)
+ 
+```
+
+```{r liberias }
+library(tidyverse)
+library(data.table)
+library(RCT)
+library(knitr)
+library(lfe)
+library(broom)
+library(DT) # Para tablas bonitas 
+library(lubridate) # Para fechas
+library(stargazer)
+```
+
+En esta tarea pondrán en práctica los conceptos de High Dimensional Inference y Regresión. La base de datos muestra las compras de helados Ben & Jerry. Cada fila es una compra. Cada columna es una característica del helado comprado o de la persona que compró. 
+
+
+## Limpieza de datos
+
+Carga los datos en BenAndJerry.csv. 
+
+```{r }
+# Carga la base de datos
+setwd("C:/Users/Jose Pablo Garcia/Box Sync/A - JP Files/Personal/ITAM/Economía Computacional/")
+base<-fread(list.files(pattern = '.csv'))
+```
+
+
+### 1. Cuales son las columnas de la base? Muestra una tabla con ellas
+
+
+```{r}
+
+
+names <- names(base)
+kable(names, caption = "Contenido del DF",
+      col.names = ("Nombres de las columnas"))
+
+```
+
+
+
+### 2. A qué nivel está la base? Esto es, cuál es la variable que define la base de manera única. Si no la hay, crea una y muestra que es única a nivel de la base (Muestra el código)
+
+No hay un nivel por lo que generaremos una variable que sea el número de compra de cada hogar (household ID), para esto usamos **ave()** con la función **seq_along**. Otra manera de hacerlo es con dplyr. Comprobamos que ambos resultados nos dan el mismo resultado.
+
+La base de datos la tenemos a nivel de compra j por cada hogar i.
+
+```{r}
+
+base$compran_hogar <- ave(base$household_id, base$household_id, FUN=seq_along)
+base <- base %>% 
+  group_by(household_id) %>%
+  mutate(id = seq_along(household_id))
+
+comprueba <- base$id-base$compran_hogar
+sum(comprueba)
+
+```
+
+
+
+
+### 3. Que variables tienen valores vacíos? Haz una tabla con el porcentaje de vacíos para las columnas que tengan al menos una observación vacía
+
+```{r}
+
+base$male_head_birth[base$male_head_birth==""] <- NA
+base$female_head_birth[base$female_head_birth==""] <- NA
+
+tablaNA <- sapply(base, function(base) sum(is.na(base)))
+tablaNA <- as.data.frame(tablaNA)
+aux_tot <- nrow(base)
+
+tablaNA$perc <- tablaNA$tablaNA/aux_tot *100
+
+tablaNA <- tablaNA %>% 
+  arrange(desc(perc))
+
+kable(tablaNA, caption = "Tabla para variables NA",
+      col.names = c("Numero de observaciones", "% de NA's"), 
+      digits = 2)
+
+
+```
+
+
+
+### 4. Haz algo con los valores vacíos (Se deben reemplazar por algún valor? Eliminar de la base?). Justifica tu respuesta. 
+
+R: Yo considero que deberían eliminarse, son variables categóricas y el que no conozcamos por completo sus características puede sesgar los datos.
+
+
+### 5. Muestra una tabla de estadisticas descriptivas de la base. Esta debe tener cada columna númerica con algunas estadísticas descriptivas (N, media, min, p05, p25, p50, p75, p90, p95, max).
+
+Vamos a convertir las variables de fecha de nacimiento en edades, tienen más interpretación y nos servirán más para conocer a los clientes
+
+
+```{r}
+
+
+hoy <- Sys.Date()
+base$hoy <- hoy
+fecha_1 <- base %>% 
+  mutate(female_head_birth, as.Date(female_head_birth, 
+                                    format = '%m/%d/%y',
+                                    origin="1970-01-01")-100*365.25)
+fecha_1 <- select(fecha_1, "-...")
+
+fecha_2 <- base %>% 
+  mutate(male_head_birth, as.Date(male_head_birth, 
+                                  format = '%m/%d/%y',
+                                  origin="1970-01-01")-100*365.25)
+
+fecha_2 <- select(fecha_2, "-...")
+
+base$fecha_jefa <- fecha_1$`-...`
+base$fecha_jefe <- fecha_2$`-...`
+
+base$edad_jefa <- interval(base$fecha_jefa, base$hoy) / years(1)
+base$edad_jefe <- interval(base$fecha_jefe, base$hoy) / years(1)
+
+base <- select(base, -c("hoy", "fecha_jefe", "fecha_jefa" ))
+
+num <- sapply(select(base, -size1_descr, -flavor_descr, -formula_descr,
+                     -household_id, -female_head_birth, -male_head_birth),
+                     function(x) length(unique(x))) # contador N
+
+nulos <- sapply(select(base, -size1_descr, -flavor_descr, -formula_descr,
+                       -household_id, -female_head_birth, -male_head_birth), 
+                function(x) sum(is.na(x)))
+
+means <- sapply(select(base, -size1_descr, -flavor_descr, -formula_descr,
+                       -household_id, -female_head_birth, -male_head_birth), 
+                function(x) mean(x, na.rm = TRUE))
+
+mins <- sapply(select(base, -size1_descr, -flavor_descr, -formula_descr,
+                       -household_id, -female_head_birth, -male_head_birth), 
+               function(x) min(x, na.rm = TRUE))
+
+p05 <- sapply(select(base, -size1_descr, -flavor_descr, -formula_descr,
+                       -household_id, -female_head_birth, -male_head_birth), 
+              function(x) quantile(x, 0.05, na.rm = TRUE))
+
+p25 <- sapply(select(base, -size1_descr, -flavor_descr, -formula_descr,
+                       -household_id, -female_head_birth, -male_head_birth), 
+              function(x) quantile(x, 0.25, na.rm = TRUE))
+
+p50 <- sapply(select(base, -size1_descr, -flavor_descr, -formula_descr,
+                       -household_id, -female_head_birth, -male_head_birth), 
+              function(x) quantile(x, 0.50, na.rm = TRUE))
+
+p75 <- sapply(select(base, -size1_descr, -flavor_descr, -formula_descr,
+                       -household_id, -female_head_birth, -male_head_birth), 
+              function(x) quantile(x, 0.75, na.rm = TRUE))
+
+p90 <- sapply(select(base, -size1_descr, -flavor_descr, -formula_descr,
+                       -household_id, -female_head_birth, -male_head_birth), 
+              function(x) quantile(x, 0.90, na.rm = TRUE))
+
+p95 <- sapply(select(base, -size1_descr, -flavor_descr, -formula_descr,
+                       -household_id, -female_head_birth, -male_head_birth), 
+              function(x) quantile(x, 0.95, na.rm = TRUE))
+
+maxs <- sapply(select(base, -size1_descr, -flavor_descr, -formula_descr,
+                       -household_id, -female_head_birth, -male_head_birth), 
+               function(x) max(x))
+
+tabla <- data.frame(variable=names(select(base, -size1_descr, -flavor_descr, -formula_descr,
+                       -household_id, -female_head_birth, -male_head_birth)),
+                    N=num,
+                    NAs=nulos,
+                    min=mins,
+                    min=mins,
+                    p05=p05,
+                    p25=p25,
+                    promedio=means,
+                    p50=p50,
+                    p75=p75,
+                    p90=p90,
+                    p95=p95,
+                    max=maxs,
+                    row.names = NULL)
+
+kable(tabla, format.args=list(big.mark=","),
+      digits = 1, caption = "Estadísticos principales")
+
+```
+
+
+### 6. Hay alguna númerica que en verdad represente una categorica? Cuales? Cambialas a factor
+
+Hay varias en realidad
+- promotion_type
+- age_of_female_head
+- age_of_male_head 
+- male_head_employment
+- female_head_employment 
+- male_head_education 
+- female_head_education
+- marital_status
+- male_head_ocupation
+- female_head_ocupation
+- household_composition
+- race
+- hispanic origin
+- region
+- flips_state_code
+- flips_county_code
+- kitchen apliances
+- tv_items
+- household_internet_conection
+
+
+#### Vamos a convertir en dummies las siguientes variables.
+
+```{r}
+
+# married status es una variable que va de 1 a 4
+# base$mstatus_1 <- ifelse(base$marital_status == "1",1,0)
+# base$mstatus_2 <- ifelse(base$marital_status == "2",1,0)
+# base$mstatus_3 <- ifelse(base$marital_status == "3",1,0)
+# base$mstatus_4 <- ifelse(base$marital_status == "4",1,0)
+
+# raza va de 1 a 4
+# base$race1 <- ifelse(base$race == "1",1,0)
+# base$race2 <- ifelse(base$race == "2",1,0)
+# base$race3 <- ifelse(base$race == "3",1,0)
+# base$race4 <- ifelse(base$race == "4",1,0)
+
+# hispanic 1 y 2
+# base$hispanic1 <- ifelse(base$race == "1",1,0)
+# base$hispanic2 <- ifelse(base$race == "2",1,0)
+
+cate <- sapply(select(base, size1_descr, flavor_descr, formula_descr,
+                     household_id, fips_state_code, fips_county_code,
+                     marital_status, race, hispanic_origin, 
+                     household_internet_connection, household_composition),
+                     function(x) length(unique(x))) # contador N
+
+cate
+
+
+#base$size <- lapply(base$size1_descr, as.factor)
+#base$sabor <- lapply(base$flavor_descr, as.factor)
+#base$formula <- lapply(base$formula_descr, as.factor)
+#base$hogar <- lapply(base$household_id, as.factor)
+
+
+
+```
+
+
+### 7. Revisa la distribución de algunas variables. Todas tienen sentido? Por ejemplo, las edades? 
+
+No tienen mucho sentido en realidad, hay muchas personas con más de 100 años, lo cual puede deberse a un error de captura en la fecha de nacimiento.
+
+
+```{r}
+
+
+edad <- ggplot(data = base, aes(age_of_female_head)) +
+  geom_density(color = "red") +
+  geom_density(aes(age_of_male_head), color = "black") +
+  labs(subtitle = "Distribución de las edades de los jefes de familia",
+       y = "Densidad",
+       x = "Edad",
+       caption = paste("Fuente: Ben&Jerry's database. Rojo = hombres. Negro = mujeres."))
+
+edad
+
+edad_p <- ggplot(data = base, aes(edad_jefe)) +
+  geom_density(color = "red") +
+  geom_density(aes(edad_jefa), color = "black") +
+  labs(subtitle = "Distribución de las edades de los jefes de familia",
+       y = "Densidad",
+       x = "Edad",
+       caption = paste("Fuente: Ben&Jerry's database. Rojo = hombres. Negro = mujeres."))
+
+  
+edad_p
+
+
+```
+
+
+### 8. Finalmente, crea una variable que sea el precio total pagado y el precio unitario
+
+El precio total se calcula como price_paid_deal + cupon_value
+El valor unitario será el precio total / quantity
+
+
+```{r}
+
+#base <- select(base, -c("p_total", "p_unit"))
+
+base$p_total <- base$price_paid_deal - base$coupon_value
+base$p_unit <- base$p_total/base$quantity
+
+
+```
+
+
+
+## Exploración de los datos 
+
+Intentaremos comprender la elasticidad precio de los helados. Para ello, debemos entender: 
+
+- La forma funcional base de la demanda (i.e. como se parecen relacionarse $q$ y $p$). 
+
+- Qué variables irían en el modelo de demanda y cuáles no para encontrar la elasticidad de manera 'insesgada'. 
+
+- Qué variables cambian la relacion de $q$ y $p$. Esto es, que variables alteran la elasticidad.
+
+Algo importante es que siempre debemos mirar primero las variables más relevantes de cerca y su relación en: 
+
+- Relación univariada
+
+- Relaciones bivariadas
+
+- Relaciones trivariadas
+
+Importante: Las gráficas deben estar bien documentadas (título, ejes con etiquetas apropiadas, etc). Cualquier gráfica que no cumpla con estos requisitos les quitaré algunos puntos.
+
+### 9. Cómo se ve la distribución del precio unitario y de la cantidad demandada. Haz un histograma.
+
+Se ven super parecidas.
+
+```{r}
+
+pyq <- ggplot(data = base, aes(x=quantity)) +
+  geom_density(color = "red") +
+  geom_density(aes(x=p_unit), color = "blue")+
+#  geom_smooth(aes(x=unit, y=p_total, linetype = sabor, color = sabor))+
+  labs(subtitle = "Relación precio unitario y cantidad",
+       y = "Densidad",
+       x = "Precio y cantidad",
+       caption = paste("Fuente: Ben&Jerry's database. Precio unitario = azul. Cantidad = rojo"))
+
+pyq + xlim(0,5)
+
+
+```
+
+
+
+### 10. Grafica la $q(p)$. Que tipo de relación parecen tener? 
+
+La cantidad aumenta conforme el precio disminuye
+
+```{r}
+
+qp <- ggplot(data = base, aes(x=p_unit, y=quantity)) +
+  geom_point(color = "blue") +
+  labs(subtitle = "Relación precio y cantidad",
+       y = "Cantidad unitaria",
+       x = "Precio",
+       caption = paste("Fuente: Ben&Jerry's database"))
+
+  
+qp 
+
+```
+
+
+### 11. Grafica la misma relación pero ahora entre $log(p+1)$ y $log(q+1)$
+
+
+```{r}
+
+base$logp <- log1p(base$p_unit)
+base$logq <- log1p(base$quantity)
+
+
+logpq <- ggplot(data = base, aes(x=logp, y=logq)) +
+  geom_point(color = "blue") +
+  labs(subtitle = "Relación logcantidad y logprecio",
+       y = "log(1+cantidad)",
+       x = "log(1+precio unitario)",
+       caption = paste("Fuente: Ben&Jerry's database."))
+
+  
+logpq
+```
+
+
+Usemos la transformación logarítmica a partir de este punto. Grafiquemos la demanda inversa. 
+
+### 12. Grafica la curva de demanda por tamaño del helado. Parece haber diferencias en la elasticidad precio dependiendo de la presentación del helado? (2 pts)
+
+```{r}
+
+
+lpq <- ggplot(data = base, aes(x=logq, y=logp)) +
+  geom_point(mapping = aes(color = size1_descr)) +
+  labs(subtitle = "Demanda inversa de helados por tamaño",
+       y = "log(1+precio unitario)",
+       x = "log(1+cantidad)",
+       caption = paste("Fuente: Ben&Jerry's database"))
+
+  
+lpq
+
+```
+
+
+
+### 13. Grafica la curva de demanda por sabor. Crea una variable con los 3 sabores más populares y agruga el resto de los sabores como 'otros'. Parece haber diferencias en la elasticidad precio dependiendo del sabor?
+
+```{r}
+
+sort(table(base$flavor_descr), decreasing = TRUE)
+base$populares <- ifelse(base$flavor_descr == "CHERRY GRCA" | 
+                           base$flavor_descr == "CHC FUDGE BROWNIE"|
+                           base$flavor_descr == "CHC CHIP C-DH","popular","otros")
+
+
+lpq2 <- ggplot(data = base, aes(x=logq, y=logp)) +
+  geom_point(mapping = aes(color = populares)) +
+  labs(subtitle = "Demanda inversa de helados populares y otros",
+       y = "log(1+Precio unitario)",
+       x = "log(1+cantidad)",
+       caption = paste("Fuente: Ben&Jerry's database"))
+
+  
+lpq2
+
+
+```
+
+
+## Estimación
+
+### 14. Estima la regresión de la curva de demanda de los helados. Reporta la tabla de la regresión
+
+Algunos tips: 
+
+- No olvides borrar la variable que recien creamos de sabores. Incluirla (dado que es perfectamente colineal con flavor), sería una violación a supuesto GM 3 de la regresión. 
+
+- No olvides quitar `quantity`, `price_unit`, `price_deal` y otras variables que sirven como identificadora. Tambien quitar `fips_state_code` y `fips_county_code`.
+
+```{r}
+base2 <- base
+base <- select(base, -c("quantity","p_unit", "price_paid_deal", 
+                        "fips_state_code", "fips_county_code",
+                        "populares", "price_paid_non_deal", "coupon_value",
+                        "edad_jefe", "edad_jefa","female_head_birth",
+                        "male_head_birth", "p_total"))
+
+base2 <- select(base2, -c("quantity","p_unit", "price_paid_deal", 
+                        "fips_state_code", "fips_county_code",
+                        "populares", "price_paid_non_deal", "coupon_value",
+                        "edad_jefe", "edad_jefa","female_head_birth",
+                        "male_head_birth", "p_total"))
+
+
+```
+
+- Empecemos con una regresión que incluya a todas las variables. 
+
+Nota: La regresión en `R` entiende que si le metes variables de texto, debe convertirlas a un factor. En algunos otros algoritmos que veremos durante el curso, tendremos que convertir manualmente toda la base a una númerica. 
+
+Quitemos las fechas
+```{r}
+
+# en la base original tiramos todos los valores que no nos gustan.
+base <- base %>% 
+  drop_na()
+
+# Imputamos el valor de cero en los nulos
+base2$promotion_type[is.na(base2$promotion_type)] <- 0
+# Corremos la función para contar los nulos en el tipo de promoción
+nulb2 <- sapply(select(base, promotion_type), 
+                function(x) sum(is.na(x)))
+#comprobamos que ya no tenemos valores nulos
+nulb2
+
+# Hacemos las regresiones
+reg1 <- lm(logq ~ . , data = base, drop.unused.leves = TRUE)
+reg2 <- lm(logq ~ . , data = base2, drop.unused.leves = TRUE)
+
+stargazer(reg1, reg2,
+          title = "Estimaciones del modelo",
+          type = "text",
+          column.labels = c("OLS","OLS"),
+          keep = c("\\logp\\b", "\\promotion_type\\b"),
+          notes.label = "Modelo 1 excluye NAs y Modelo 2 inputa cero",
+          dep.var.labels.include = TRUE)
+
+
+colnames(base)
+```
+
+### 15 (2 pts). Cuales son los elementos que guarda el objecto de la regresión? Listalos. Cual es el F-test de la regresión? Escribe la prueba de manera matemática (i.e. como la vimos en clase). (Tip: `summary(fit)` te arroja algo del F-test)
+
+```{r}
+
+summary(reg1)
+
+```
+
+
+
+### 16. Cuál es la elasticidad precio de los helados Ben and Jerry ? Es significativo? Interpreta el coeficiente.
+
+La elasticidad precio no es concluyente, dos modelos arrojan signos distintos, sin embargo, hay evidencia respecto al tipo de promoción que se le otorgue al cliente. Es decir: *Ceteris paribus, los clientes incrementan entre un 3 y 4% sus compras en helados cuando enfrentan o reciben una promoción. Por lo tanto, el elemento clave en una estrategia comercial debe ser las promociones y no los precios.*
+
+## 17. Cuántos p-values tenemos en la regresión. Haz un histograma de los p-values. 
+
+```{r}
+
+#obtenemos los p-values
+pv1 <- summary(reg1)$coefficients[,4]
+pv1 <- as.data.frame(pv1)
+
+hpv1 <- ggplot(data = pv1, aes(x=pv1))+
+  geom_histogram() +
+  labs(subtitle = "Histograma de los p-values",
+       y = "densidad",
+       x = "valores críticos",
+       caption = paste("Fuente: Estimaciones de reg1 utilizando Ben&Jerry's database"))
+
+hpv1
+
+pv2 <- summary(reg2)$coefficients[,4]
+pv2 <- as.data.frame(pv2)
+
+hpv2 <- ggplot(data = pv2, aes(x=pv2))+
+  geom_histogram() +
+  labs(subtitle = "Histograma de los p-values",
+       y = "densidad",
+       x = "valores críticos",
+       caption = paste("Fuente: Estimaciones de reg2 utilizando Ben&Jerry's database"))
+
+hpv2
+
+
+
+
+```
+
+
+### 18 (4pts). Realiza un ajuste FDR a una $q=0.10$. Grafica el procedimiento (con y sin zoom-in a p-values<0.05). Cuantas variables salían significativas con $\alpha = 0.05$? Cuantas salen con FDR? 
+Tip: crea el ranking de cada p-value como `resultados %>% arrange(p.value) %>% mutate(ranking = row_number)`
+
+
+```{r}
+
+tabla_pv1 <- pv1 %>% 
+  arrange(pv1)
+
+tabla_pv1$num <- 1:nrow(tabla_pv1) 
+
+q <- 0.1
+#Método FDR
+tabla_pv1$FDR <- q*(tabla_pv1$num/length(tabla_pv1$pv1))
+tabla_pv1$tabla_resul <-tabla_pv1$pv1 <= tabla_pv1$FDR
+
+kable(tabla_pv1, caption = "Tabla de p-values Modelo 1",
+      col.names = c("valores críticos", "orden", "FDR", "Resultado"), 
+      digits = 5)
+
+fdr1 <- ggplot(data = tabla_pv1, aes(x=num, y=pv1)) +
+  geom_point(color = "red") + 
+  geom_line(aes(x=num, y=FDR), color = "black") +
+  labs(subtitle = "Algoritmo FDR y p-values",
+       y = "p_value",
+       x = "ranking",
+       caption = paste("Fuente: Estimaciones de reg1 utilizando Ben&Jerry's database"))
+
+fdr1
+fzoom1 <- fdr1 + xlim(0,20) + ylim(0,0.1)
+fzoom1
+
+tabla_pv2 <- pv2 %>% 
+  arrange(pv2) 
+
+tabla_pv2$num <- 1:nrow(tabla_pv2) 
+tabla_pv2$FDR <- q*(tabla_pv2$num/length(tabla_pv2$pv2))
+tabla_pv2$tabla_resul <-tabla_pv2$pv2 <= tabla_pv2$FDR
+
+kable(tabla_pv2, caption = "Tabla de p-values Modelo 1",
+      col.names = c("valores críticos", "orden", "FDR", "Resultado"), 
+      digits = 5)
+
+fdr2 <- ggplot(data = tabla_pv2, aes(x=num, y=pv2)) +
+  geom_point(color = "blue") + 
+  geom_line(aes(x=num, y=FDR), color = "orange") +
+  labs(subtitle = "Algoritmo FDR y p-values",
+       y = "p_value",
+       x = "ranking",
+       caption = paste("Fuente: Estimaciones de reg2 utilizando Ben&Jerry's database"))
+
+fdr2
+fzoom2 <- fdr2 + xlim(0,30) + ylim(0,0.1)
+fzoom2
+
+```
+
+
+### 19 (2pts). Repite el ejercicio pero ahora con Holm-Bonferroni. Comparalo vs FDR. En este caso cuantas variables son significativas?  Haz la grafica comparativa (solo con zoom-in)
+
